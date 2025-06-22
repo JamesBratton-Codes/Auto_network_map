@@ -54,6 +54,8 @@ The script will generate two files:
 
 -   `network_inventory.xlsx`: A detailed Excel report with sheets for Devices, Links, and connected endpoints.
 -   `network_map.png`: A visual diagram of the network topology.
+  
+![network_map](https://github.com/user-attachments/assets/a3b7b0ba-d1d8-4577-a94b-945c0f9f229a)
 
 *(You could include a sample image of your map here)*
 
