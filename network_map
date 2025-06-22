@@ -1,0 +1,10 @@
+// Network Map
+strict digraph {
+	node [shape=box style=rounded]
+	fontsize=20 label="Network Diagram"
+	rankdir=TB
+	ImperialCore
+	LANtrooper
+	ImperialCore -> LANtrooper [label="GigabitEthernet0/0/1 -> GigabitEthernet1/0/48"]
+	LANtrooper -> ImperialCore [label="GigabitEthernet1/0/48 -> GigabitEthernet0/0/1"]
+}
