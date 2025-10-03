@@ -55,6 +55,69 @@ def parse_mac_table(mac_output):
             })
     return mac_entries
 
+
+def get_network_neighbors(net_connect):
+    """
+    Retrieves neighbor information using CDP, then falling back to LLDP.
+    Returns a list of standardized neighbor dictionaries.
+    """
+    neighbors = []
+    # --- Try CDP First ---
+    try:
+        print("  - Trying to get neighbors via CDP...")
+        cdp_neighbors = net_connect.send_command("show cdp neighbors detail", use_textfsm=True)
+        if cdp_neighbors and isinstance(cdp_neighbors, list):
+            print(f"  - Found {len(cdp_neighbors)} CDP neighbors.")
+            for neighbor in cdp_neighbors:
+                mgmt_ip = neighbor.get('mgmt_address')
+                if not mgmt_ip:
+                    continue  # Skip neighbors without a management IP
+
+                standardized_neighbor = {
+                    'protocol': 'cdp',
+                    'neighbor_name': normalize_hostname(neighbor.get('neighbor_name')),
+                    'mgmt_address': mgmt_ip,
+                    'platform': neighbor.get('platform', ''),
+                    'capabilities': neighbor.get('capabilities', ''),
+                    'local_interface': neighbor.get('local_interface', ''),
+                    'neighbor_interface': neighbor.get('neighbor_interface', '')
+                }
+                neighbors.append(standardized_neighbor)
+            # If CDP provides results, we typically prefer it.
+            if neighbors:
+                return neighbors
+    except Exception as e:
+        print(f"  - CDP command failed or not supported: {e}")
+
+    # --- If CDP Fails or is Empty, Try LLDP ---
+    try:
+        print("  - Trying to get neighbors via LLDP...")
+        lldp_neighbors = net_connect.send_command("show lldp neighbors detail", use_textfsm=True)
+        if lldp_neighbors and isinstance(lldp_neighbors, list):
+            print(f"  - Found {len(lldp_neighbors)} LLDP neighbors.")
+            for neighbor in lldp_neighbors:
+                # TextFSM for LLDP uses different keys. We normalize them here.
+                mgmt_ip = neighbor.get('management_ip') or neighbor.get('management_address')
+                if not mgmt_ip:
+                    continue  # Skip neighbors without a management IP
+
+                standardized_neighbor = {
+                    'protocol': 'lldp',
+                    'neighbor_name': normalize_hostname(neighbor.get('neighbor_sysname') or neighbor.get('system_name')),
+                    'mgmt_address': mgmt_ip,
+                    'platform': neighbor.get('neighbor_sysdesc', ''),
+                    'capabilities': ", ".join(neighbor.get('neighbor_capabilities', [])),
+                    'local_interface': neighbor.get('local_interface', ''),
+                    'neighbor_interface': neighbor.get('neighbor_interface', '')
+                }
+                neighbors.append(standardized_neighbor)
+            return neighbors
+    except Exception as e:
+        print(f"  - LLDP command failed or not supported: {e}")
+
+    return neighbors
+
+
 # --- User Input ---
 print("Network Auto-Discovery Tool\n---------------------------")
 seed_ip = input("Enter the seed device IP address: ")
@@ -109,18 +172,18 @@ def discover_network(seed_ip, username, password, enable_secret, known_devices=N
                 capabilities = ''
                 device_type = 'Unknown'
                 vendor = get_vendor_from_platform(platform)
-                # Try to get device_type and vendor from CDP neighbor if available
-                neighbors = net_connect.send_command("show cdp neighbors detail", use_textfsm=True)
-                print("Raw neighbors data:", neighbors)  # Debug print
-                if neighbors:
-                    for neighbor in neighbors:
-                        if neighbor.get('mgmt_address') == mgmt_ip:
-                            capabilities = neighbor.get('capabilities', '')
-                            platform = neighbor.get('platform', platform)
-                            device_type = get_device_type(capabilities, platform)
-                            vendor = get_vendor_from_platform(platform)
-                            break
+
+                # Get neighbors using the new abstracted function
+                neighbors = get_network_neighbors(net_connect)
+
+                # Determine current device's type from its own capabilities if possible
+                # This is a fallback in case it's not a neighbor to any other device
+                # A more robust method would be to parse 'show version' or similar commands
+                if not neighbors:
+                    device_type = get_device_type('', platform)
                 else:
+                    # Attempt to find self in neighbor list of another device (less reliable)
+                    # For now, we'll just use the platform info
                     device_type = get_device_type('', platform)
                 # Add device row
                 device_arp_mac_rows.append({
@@ -311,30 +374,39 @@ def discover_network(seed_ip, username, password, enable_secret, known_devices=N
                             'vlan': mac['vlan'],
                             'port': mac['port']
                         })
-                # --- CDP Neighbors and Links ---
+                # --- Process Neighbors and Links ---
                 for neighbor in neighbors:
-                    neighbor_ip = neighbor.get('mgmt_address')
-                    neighbor_name = normalize_hostname(neighbor.get('neighbor_name', neighbor_ip))
-                    neighbor_model = neighbor.get('platform', '')
-                    neighbor_caps = neighbor.get('capabilities', '')
+                    neighbor_ip = neighbor['mgmt_address']
+                    neighbor_name = neighbor['neighbor_name']
+                    neighbor_model = neighbor['platform']
+                    neighbor_caps = neighbor['capabilities']
                     neighbor_type = get_device_type(neighbor_caps, neighbor_model)
                     neighbor_vendor = get_vendor_from_platform(neighbor_model)
+
                     # Add neighbor to known_devices if not already present
-                    if neighbor_ip and neighbor_ip not in known_devices:
-                        known_devices[neighbor_ip] = {'ip': neighbor_ip, 'hostname': neighbor_name, 'model': neighbor_model, 'device_type': neighbor_type, 'vendor': neighbor_vendor}
+                    if neighbor_ip not in known_devices:
+                        known_devices[neighbor_ip] = {
+                            'ip': neighbor_ip,
+                            'hostname': neighbor_name,
+                            'model': neighbor_model,
+                            'device_type': neighbor_type,
+                            'vendor': neighbor_vendor
+                        }
+
                     # Add link info
                     link_info = {
                         'source_host': hostname,
                         'source_ip': mgmt_ip,
-                        'source_port': neighbor.get('local_interface', ''),
+                        'source_port': neighbor['local_interface'],
                         'target_host': neighbor_name,
                         'target_ip': neighbor_ip,
-                        'target_port': neighbor.get('neighbor_interface', '')
+                        'target_port': neighbor['neighbor_interface']
                     }
                     known_links.append(link_info)
+
                     # If neighbor not scanned, prompt for credentials and add to queue
-                    if neighbor_ip and neighbor_ip not in scanned_devices and all(neighbor_ip != queued[0] for queued in scan_queue):
-                        print(f"  -> Discovered new neighbor: {neighbor_name} at {neighbor_ip}")
+                    if neighbor_ip not in scanned_devices and all(neighbor_ip != queued[0] for queued in scan_queue):
+                        print(f"  -> Discovered new neighbor via {neighbor['protocol'].upper()}: {neighbor_name} at {neighbor_ip}")
                         if neighbor_ip in credentials_cache:
                             n_user, n_pwd, n_secret = credentials_cache[neighbor_ip]
                         else:
