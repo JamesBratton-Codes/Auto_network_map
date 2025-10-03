@@ -128,7 +128,6 @@ def discover_network(seed_ip, username, password, enable_secret, known_devices=N
                     'ip': mgmt_ip,
                     'hostname': hostname,
                     'model': model,
-                    'username': user,
                     'device_type': device_type,
                     'vendor': vendor,
                     'protocol': '', 'arp_ip': '', 'age': '', 'mac_address': '', 'type': '', 'interface': '',
@@ -322,7 +321,7 @@ def discover_network(seed_ip, username, password, enable_secret, known_devices=N
                     neighbor_vendor = get_vendor_from_platform(neighbor_model)
                     # Add neighbor to known_devices if not already present
                     if neighbor_ip and neighbor_ip not in known_devices:
-                        known_devices[neighbor_ip] = {'ip': neighbor_ip, 'hostname': neighbor_name, 'model': neighbor_model, 'username': None, 'device_type': neighbor_type, 'vendor': neighbor_vendor}
+                        known_devices[neighbor_ip] = {'ip': neighbor_ip, 'hostname': neighbor_name, 'model': neighbor_model, 'device_type': neighbor_type, 'vendor': neighbor_vendor}
                     # Add link info
                     link_info = {
                         'source_host': hostname,
